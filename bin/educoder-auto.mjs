@@ -66,6 +66,8 @@ iWrite（英语写作）：
       --no-verify         不做事后回读校验
       --extra <text>      额外作答要求，例如「全用英文作答」
       --gap <ms>          每题之间的间隔毫秒
+      --image <题号>=<路径>  图片题答案（可重复）。题干要求「画一张图/拍照上传」时用，
+                          图片会传到超星图床，该题答案换成带 <img> 的 HTML
       --json              输出完整 JSON
   educoder-auto chaoxing-works                 列出待做作业
 
@@ -74,6 +76,23 @@ iWrite（英语写作）：
   EDUC_AI_KEY        对应 apiKey
   EDUC_AI_MODEL      模型名
 `;
+
+/** --image 题号=路径（可重复）→ {题号: 路径} */
+function parseImageArgs(list) {
+  if (!Array.isArray(list) || !list.length) return undefined;
+  const out = {};
+  for (const piece of list) {
+    const at = String(piece).indexOf('=');
+    if (at <= 0) {
+      console.error(`--image 用法是「题号=图片路径」，这条跳过：${piece}`);
+      continue;
+    }
+    const qid = String(piece).slice(0, at).trim();
+    const file = String(piece).slice(at + 1).trim();
+    if (qid && file) out[qid] = file;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 
 async function main() {
   const { values, positionals } = parseArgs({
@@ -94,6 +113,7 @@ async function main() {
       manual: { type: 'boolean', default: false },
       force: { type: 'boolean', default: false },
       gap: { type: 'string' },
+      image: { type: 'string', multiple: true },
       'no-verify': { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -394,6 +414,7 @@ async function main() {
         verify: values['no-verify'] !== true,
         extra: values.extra,
         gapMs: values.gap !== undefined ? Number(values.gap) : 0,
+        images: parseImageArgs(values.image),
         trace,
       });
       if (values.json) {

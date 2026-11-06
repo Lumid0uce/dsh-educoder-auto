@@ -327,6 +327,16 @@ chaoxing_solve({ submit: false })               // 只暂存，不交卷
 - `extra`：额外作答要求，会当硬约束拼进题干（「全用中文」「简答不少于 80 字」）。
 - `gapMs`：每题之间的间隔毫秒，默认 0。
 
+### 图片题（题干要「画一张图 / 拍照上传」）
+
+`chaoxing_solve({ pick: '5.2', images: { 405668605: 'E:/pic/timeline.png' } })`
+
+- 有些简答题平台只收**图片**（「用人生轨迹图绘制…请拍照上传」）。这类题文本答得再好也不算分，必须把图片传上去。
+- 插件会把图传到超星图床（`POST http://notice.chaoxing.com/pc/files/uploadNoticeFile`，字段名 `attrFile`），拿回 URL，把该题答案换成 `<p><img src="…"></p>` 的 HTML——和平台自己的「图片答案」格式一致。
+- `images` 可以给对象 `{ 题号: 本地路径 }`，也可以给字符串 `"题号=路径,题号=路径"`；CLI 用 `--image 题号=路径`（可重复）。
+- 图哪来都行：截图、画图板、脚本渲染（本项目实测用 Playwright 渲染 SVG 时间轴，中文清晰可控）、外部生图模型。**别用生图模型去画带中文长文本的信息图**，字容易糊。
+- 简答题的作答要求已收紧：题干要求交图的，模型只写一两句说明，图由 `images` 补。
+
 ### 链路
 
 1. **定位** —— `GET https://mooc1-api.chaoxing.com/work/stu-work` 列作业，挑出 `mtaskmsgspecial?type=work&taskrefId=` 的入口；入口会 **302** 到 `mooc-ans/work/phone/task-work?...`，真正的 `doHomeWork?...` 地址在这一页的 HTML 里（所以 `request()` 会跟同源 GET 跳转，最多 5 跳）。
@@ -488,6 +498,7 @@ node bin/educoder-auto.mjs chaoxing-status
 node bin/educoder-auto.mjs chaoxing-login
 node bin/educoder-auto.mjs chaoxing-works
 node bin/educoder-auto.mjs chaoxing-solve [url|关键词] --submit --extra "简答题不少于 80 字"
+node bin/educoder-auto.mjs chaoxing-solve 5.2 --image 405668605=E:/pic/timeline.png   # 图片题
 ```
 
 环境变量：`EDUC_AI_BASEURL` / `EDUC_AI_KEY` / `EDUC_AI_MODEL`。
@@ -513,6 +524,8 @@ node bin/educoder-auto.mjs chaoxing-solve [url|关键词] --submit --extra "简�
 - **iWrite 的响应不都带信封**：`/api/student_task_index/loadByStudentId` 直接返回 `{totalPages, stid, totalElements}`，没有 `{code,msg,data}`。
 - **iWrite 的题干是转义过的 HTML**（`&lt;p&gt;`），要先 `htmlToText` 再喂模型，否则模型看到一堆实体符号。
 - **iWrite 写作页的提交按钮没有文字**，只有 `aria-label="提交"` 和一张图片，按文字点不到。
+- **学习通的「已完成」状态没有 class**：普通条目是 `<span class="status">未提交</span>`，但已完成那条是 `<span aria-hidden="true">已完成</span>`。只看 class 会把交过的作业当成没交，白跑一轮还在回读里产出假不一致。现在按 `aria-label` 里的「作业状态XX」+ 全量扫 `<span>` 文本兜底（`statusOf()`），列表里 `done: true` 的直接不做。
+- **简答题的答案在隐藏域里是单引号包的**：`value='……'`，可以跨行、里面还有双引号。按 `<input[^>]*>` 抓会在第一个 `>` 处截断，读成空串——所以 `scanTags()` 是按标签名扫、认引号。图片题的答案则是 `<img>` 的 HTML，一样存在这个隐藏域里。
 - **学习通交作业每题必须用它自己那一页的隐藏域**：混进别的页的字段（尤其 `questionId`）后台只认第一条，后面的题会存成空白。所以 `fetchWork` 会把每页的隐藏域一起留着，提交时按题号取自己那份。
 - **学习通多选/多空要发同名重复字段**：`answer1234=A&answer1234=C`；拼成 `answer1234=A,C` 后台只认第一个，等于只选了一个。
 - **学习通的判断题控件 value 是 `true`/`false`**，不是「对/错」也不是 0/1；选择题是选项字母。

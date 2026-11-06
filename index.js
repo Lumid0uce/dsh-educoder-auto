@@ -992,6 +992,12 @@ export function apply(ctx, rawConfig) {
         verify: { type: 'boolean', description: '暂存后回读页面对答案，默认 true' },
         extra: { type: 'string', description: '额外作答要求，会拼进 prompt，例如「全用英文作答」' },
         gapMs: { type: 'number', description: '每题之间的间隔毫秒，0 = 不留停顿' },
+        images: {
+          type: 'object',
+          description:
+            '图片题答案：{题目id: 本地图片路径}。题干要求「画一张图 / 拍照上传」时用，图片会传到超星图床并把该题答案换成带 <img> 的 HTML。也可写成 "题号=路径,题号=路径" 字符串',
+          additionalProperties: { type: 'string' },
+        },
       },
       additionalProperties: false,
     },
@@ -1047,6 +1053,20 @@ export function apply(ctx, rawConfig) {
     },
     async execute(args, exec) {
       const trace = chaoxingSolver.createTrace();
+      // images 支持对象，也支持「题号=路径,题号=路径」这种字符串（按钮/命令行传过来常是字符串）
+      const parseImages = (value) => {
+        if (!value) return undefined;
+        if (typeof value === 'object') return value;
+        const out = {};
+        for (const piece of String(value).split(/[,;]/)) {
+          const at = piece.indexOf('=');
+          if (at <= 0) continue;
+          const qid = piece.slice(0, at).trim();
+          const file = piece.slice(at + 1).trim();
+          if (qid && file) out[qid] = file;
+        }
+        return Object.keys(out).length ? out : undefined;
+      };
       const result = await chaoxingSolver.solveWork({
         workUrl: args.url,
         pick: args.pick,
@@ -1056,6 +1076,7 @@ export function apply(ctx, rawConfig) {
         verify: args.verify ?? chaoxingConfig.verify !== false,
         extra: args.extra ?? chaoxingConfig.extra ?? undefined,
         gapMs: args.gapMs ?? chaoxingConfig.gapMs ?? 0,
+        images: parseImages(args.images),
         trace,
         signal: exec?.signal,
       });

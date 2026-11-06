@@ -196,5 +196,43 @@ export default async function run() {
   eq(api.scanTags('<input value="a>b"><input value=\'c\'>', 'input').length, 2, 'scanTags 认引号，value 里有 > 也不截断');
   n += 5;
 
-  return `学习通真机结构单测：${n} 条断言全过（列表标题/翻页参数/手机端选项/简答识别/实体解码/简答回读）`;
+  // ── 7. 列表状态：已完成的作业状态 span 没有 class="status" ────────────────
+  const LIST_DONE = `
+    <li onclick="goTask(this);" data="https://mooc1-api.chaoxing.com/mooc-ans/android/mtaskmsgspecial?taskrefId=57607290&type=work&enc_task=x">
+      <div role="option">
+        <p aria-hidden="true">第二章作业</p>
+        <span aria-hidden="true">已完成</span>
+        <span aria-hidden="true">《软件工程专业...》</span>
+        <span class="fr" aria-hidden="true">剩余50小时21分钟</span>
+        <span aria-label="作业名称第二章作业作业状态已完成所属课程软件工程专业...剩余时间剩余50小时21分钟"></span>
+      </div>
+    </li>`;
+  const LIST_OPEN = `
+    <li onclick="goTask(this);" data="https://mooc1-api.chaoxing.com/mooc-ans/android/mtaskmsgspecial?taskrefId=58136411&type=work&enc_task=y">
+      <div role="option">
+        <p aria-hidden="true">（选做）5.2.职业榜样的价值探寻</p>
+        <span class="status" aria-hidden="true">未提交</span>
+        <span aria-label="作业名称（选做）5.2.职业榜样的价值探寻作业状态未提交所属课程2026年秋..."></span>
+      </div>
+    </li>`;
+  const done = api.parseTaskLinks(LIST_DONE)[0];
+  const open = api.parseTaskLinks(LIST_OPEN)[0];
+  eq(done.title, '第二章作业', '已完成那条的标题照旧');
+  eq(done.status, '已完成', '没 class 的状态 span 也要认出来');
+  eq(done.done, true, '已完成 → done=true');
+  eq(open.status, '未提交', '有 class="status" 的照旧');
+  eq(open.done, false, '未提交 → done=false');
+  n += 5;
+
+  // 8. 图片题答案的 HTML 拼装
+  const html1 = api.imageAnswerHtml('https://p.cldisk.com/a/b/origin.png', { body: '补充一句' });
+  assert(html1.includes('<img src="https://p.cldisk.com/a/b/origin.png"'), '图片答案必须带 <img src>');
+  assert(html1.includes('<p>补充一句</p>'), '正文要跟在图后面');
+  const html2 = api.imageAnswerHtml('https://x/y.png', { caption: '人生轨迹图：' });
+  assert(html2.startsWith('<p>人生轨迹图：</p>'), '导语在最前面');
+  assert(!html2.includes('<p></p>'), '没正文就不要留空 <p>');
+  assert(api.imageAnswerHtml('u').startsWith('<p><img'), '只给 url 也成立');
+  n += 5;
+
+  return `学习通真机结构单测：${n} 条断言全过（列表标题/翻页参数/手机端选项/简答识别/实体解码/简答回读/作业状态/图片答案）`;
 }

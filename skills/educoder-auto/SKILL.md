@@ -95,6 +95,7 @@ PC 端作业页是 iframe + UEditor，几乎没法稳定自动化；所以走 `m
 | | `verify` | 暂存后回读页面对答案，默认 `true`（建议别关） |
 | | `extra` | 额外作答要求，会当硬约束拼进题干 |
 | | `gapMs` | 每题之间的间隔毫秒，默认 0 |
+| | `images` | 图片题答案 `{题号: 本地图片路径}`（或 `"题号=路径,题号=路径"`）。题干要「画一张图 / 拍照上传」时必须用：图片传超星图床，答案换成带 `<img>` 的 HTML |
 | `chaoxing_login` | `timeoutSec` | 等登录的秒数，默认 300 |
 | | `force` | 已有登录态也重登 |
 | `chaoxing_status` | 无 | 体检 + 待做作业列表 |
@@ -245,6 +246,7 @@ iWrite 专属的坑：
 - **PC 端页面别硬啃**。作业正文在 iframe 里、编辑器是 UEditor，DOM 路极不稳定；所有抓题/提交都走 `mooc1-api.chaoxing.com` 的移动端接口。
 - **入口是 302 的**。`mtaskmsgspecial` 会跳 `task-work`，真正的 `doHomeWork` 地址在跳转后的 HTML 里；请求层不跟同源跳转就只拿到空 body。
 - **翻页要摘 `checkIntegrity=true`**，否则服务端无视 `index`、每页都是第一题；`enc` 反过来不能删。
+- **题干要「画一张图 / 拍照上传」的题，文字答案无效**，必须传图：走 `images`（`{题号: 路径}`），插件会把图传到 `notice.chaoxing.com/pc/files/uploadNoticeFile`（字段名 `attrFile`）再把答案换成 `<img>` HTML。带中文长文本的图别交给生图模型，用 SVG/HTML 渲染再截图。
 - **选项取 `orichoice`**，不是 `span` 里显示的字母（页面会打乱显示顺序）。
 - **简答答案在隐藏域 `answer{题号}` 里，单引号包裹且可跨行**，读回时要用认引号的扫描（`scanTags`），再用 `span#answerAria` 的 `aria-label` 兜底。回读对不上时看 `verified.mismatch` 的「页面 N 字 / 提交 M 字」判断是真没存还是被后台改写。
 
