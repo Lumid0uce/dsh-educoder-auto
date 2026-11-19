@@ -11,6 +11,7 @@
 import assert from 'node:assert/strict';
 
 import * as api from '../lib/chaoxing-api.mjs';
+import * as ai from '../lib/chaoxing-ai.mjs';
 
 function eq(actual, expected, label) {
   assert.deepEqual(actual, expected, label);
@@ -234,5 +235,73 @@ export default async function run() {
   assert(api.imageAnswerHtml('u').startsWith('<p><img'), '只给 url 也成立');
   n += 5;
 
-  return `学习通真机结构单测：${n} 条断言全过（列表标题/翻页参数/手机端选项/简答识别/实体解码/简答回读/作业状态/图片答案）`;
+  // ── 9. 整卷页 / 多选题模板：div.answerBg + span.num_option_dx[data] ─────
+  // 这是 2026-11-19 实际翻车的那一版：单选题走 span[orichoice]，
+  // 多选题换成这套模板，解析器只认前者 → 多选 opts=0 → 判 unknown →
+  // 按主观题把中文塞进 answer 字段 → 平台全判 0 分。
+  const PAGE_MULTI = `
+<div class="whiteDiv">
+  <div class="padBom50 questionLi fontLabel singleQuesId" typeName="多选题" id="question406411966" data="406411966">
+    <h3 class="mark_name"><span class="colorShallow">(多选题, 1分)</span>人生观主要包括哪三个方面的内容（ ）</h3>
+    <input type="hidden" id="answertype406411966" name="answertype406411966" value="1" />
+    <input type="hidden" id="answer406411966" name="answer406411966" value="" />
+    <div class="stem_answer qtDetail">
+      <div class="clearfix answerBg workTextWrap" onclick="addMultipleChoice(this);" role="checkbox" aria-label='A 人生目的选择' qid="406411966" qtype="1">
+        <span aria-hidden="true" data="A" class="choice406411966 num_option_dx fl">A</span>
+        <div aria-hidden="true" class="fl answer_p"><p>人生目的</p></div>
+      </div>
+      <div class="clearfix answerBg workTextWrap" onclick="addMultipleChoice(this);" role="checkbox" aria-label='B 人生态度选择' qid="406411966" qtype="1">
+        <span aria-hidden="true" data="B" class="choice406411966 num_option_dx fl">B</span>
+        <div aria-hidden="true" class="fl answer_p"><p>人生态度</p></div>
+      </div>
+      <div class="clearfix answerBg workTextWrap" onclick="addMultipleChoice(this);" role="checkbox" aria-label='C 人生价值选择' qid="406411966" qtype="1">
+        <span aria-hidden="true" data="C" class="choice406411966 num_option_dx check_answer_dx fl">C</span>
+        <div aria-hidden="true" class="fl answer_p"><p>人生价值</p></div>
+      </div>
+      <div class="clearfix answerBg workTextWrap" onclick="addMultipleChoice(this);" role="checkbox" aria-label='D 人生理想选择' qid="406411966" qtype="1">
+        <span aria-hidden="true" data="D" class="choice406411966 num_option_dx fl">D</span>
+        <div aria-hidden="true" class="fl answer_p"><p>人生理想</p></div>
+      </div>
+    </div>
+  </div>
+</div>`;
+  const multi = api.parseQuestionPage(PAGE_MULTI, { questionId: '406411966' });
+  eq(multi.kind, 'multiple', '多选题必须认成 multiple（不能落成 unknown）');
+  eq(multi.type, '1', '题型编号从 answertype{qid} 也读得到');
+  eq(multi.options.map((o) => o.value), ['A', 'B', 'C', 'D'], '选项值取 span[data]');
+  eq(multi.options.map((o) => o.label), ['人生目的', '人生态度', '人生价值', '人生理想'], '选项文字取 answer_p');
+  eq(multi.options.filter((o) => o.checked).map((o) => o.value), ['C'], '选中态看 num_option_dx.check_answer_dx');
+  ok(multi.options.every((o) => o.multiple), '每个选项都标 multiple，用于题型兜底');
+  ok(multi.stem.includes('人生观主要包括'), '题干解析');
+  n += 7;
+
+  // 单选同一套模板（role=radio / num_option）
+  const PAGE_RADIO_BOX = `
+<div class="questionLi singleQuesId" id="question406411954" data="406411954">
+  <input type="hidden" id="answertype406411954" name="answertype406411954" value="0" />
+  <div role="radio" aria-label='A 经济关系选择' qid="406411954" qtype="0" class="clearfix answerBg">
+    <span data="A" class="choice406411954 num_option fl">A</span>
+    <div class="fl answer_p"><p>经济关系</p></div>
+  </div>
+  <div role="radio" aria-label='B 社会关系选择' qid="406411954" qtype="0" class="clearfix answerBg">
+    <span data="B" class="choice406411954 num_option fl">B</span>
+    <div class="fl answer_p"><p>社会关系</p></div>
+  </div>
+</div>`;
+  const radioBox = api.parseQuestionPage(PAGE_RADIO_BOX, { questionId: '406411954' });
+  eq(radioBox.kind, 'single', '单选模板 → single');
+  eq(radioBox.options.map((o) => o.value), ['A', 'B'], '单选选项值');
+  ok(!radioBox.options.some((o) => o.multiple), '单选不标 multiple');
+  n += 3;
+
+  // 归一化兜底：题型没认出来但有选项时，必须还按选项字母作答，不能原文照发
+  const fakeMulti = { ...multi, kind: 'unknown' };
+  const norm = ai.normalizeAnswer(fakeMulti, '人生目的、人生态度、人生价值');
+  ok(Array.isArray(norm.value), 'unknown + 有选项 → 仍按多选返回数组');
+  eq(norm.value, ['A', 'B', 'C'], '模型给中文选项内容也能反查成字母');
+  const normLetter = ai.normalizeAnswer(fakeMulti, 'ABC');
+  eq(normLetter.value, ['A', 'B', 'C'], '直接给字母照旧');
+  n += 3;
+
+  return `学习通真机结构单测：${n} 条断言全过（列表标题/翻页参数/手机端选项/简答识别/实体解码/简答回读/作业状态/图片答案/多选模板）`;
 }

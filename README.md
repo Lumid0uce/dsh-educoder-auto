@@ -358,6 +358,25 @@ chaoxing_solve({ submit: false })               // 只暂存，不交卷
 
 答案格式不靠猜：选项的合法值直接读 `span[orichoice]` 的 `orichoice`（页面上显示的字母常被**打乱**，`orichoice` 才是提交值），判断题只可能是 `true`/`false`，所以模型给的是「人话」，插件负责翻成控件值。另外题型编号是固定表：0 单选 / 1 多选 / 2 填空 / 3 判断 / 4 简答 / 5 名词解释 / 6 论述 / 7 计算——4~7 在页面上都是「一个多行编辑器」，所以必须靠编号区分成 `text`，不能只看控件。
 
+### 两套选项模板都得认（2026-11-19 踩过，10 题全判 0）
+
+| 模板 | 出现位置 | 结构 | 提交值 |
+|---|---|---|---|
+| ① 手机「一页一题」 | `doHomeWork?index=N` 单题页 | `span[data="answer{qid}"][orichoice="B"]` | `orichoice` |
+| ② 整卷页 / 多选题 | 整卷作答页 | `div.answerBg[role=checkbox][qid]` → `span.num_option_dx[data="A"]` | `data` |
+
+**多选题只走模板 ②**。早先的 `parseMobileChoices` 只认 ①，多选题的 `options.length` 是 0 →
+`classifyKind` 判 `unknown` → `normalizeAnswer` 把模型给的中文（「人生目的、人生态度、人生价值」）
+原文照发进 `answer{qid}` → 选择题后台只认字母，整题按空答案判 0。
+
+现在三重兜底：
+
+1. `parseChoiceOptions()` 认模板 ②（`role=radio|checkbox` / `class=answerBg` / 带 `qid` 属性都算）；
+2. 题型编号（`type{qid}` 或整卷页的 `answertype{qid}`）优先，认出来是选择/判断就绝不让它落成 `unknown`；
+3. `normalizeAnswer` 遇到 `unknown`/`text` 但页面有选项时，强制按选项作答，且字母匹配失败会
+   按选项文字反查（精确子串 → 相似度 ≥0.6 的模糊匹配）；
+4. `solveWork` 暂存前有闸门：选择题答案里出现不在选项表里的值就直接停，不提交。
+
 ### 为什么不用 PC 页面 DOM
 
 PC 端作业正文在 iframe 里，填空/简答用 UEditor（`UE.getEditor(name).setContent()`），页面结构随版本变。移动端的 `mooc1-api.chaoxing.com` 接口是同一份数据、结构稳定、还带全部隐藏域，所以整条链路都走接口，浏览器只用来登录一次。
