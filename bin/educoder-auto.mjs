@@ -13,6 +13,7 @@
  */
 
 import { parseArgs } from 'node:util';
+import { join } from 'node:path';
 import * as solver from '../lib/solver.mjs';
 import * as session from '../lib/session.mjs';
 import * as api from '../lib/educoder-api.mjs';
@@ -22,6 +23,7 @@ import * as iwriteApi from '../lib/iwrite-api.mjs';
 import * as chaoxingSolver from '../lib/chaoxing-solver.mjs';
 import * as chaoxingSession from '../lib/chaoxing-session.mjs';
 import * as chaoxingApi from '../lib/chaoxing-api.mjs';
+import * as chaoxingExam from '../lib/chaoxing-exam.mjs';
 
 const USAGE = `
 educoder-auto —— 头歌自动解题 / iWrite 自动写作 CLI
@@ -70,6 +72,14 @@ iWrite（英语写作）：
                           图片会传到超星图床，该题答案换成带 <img> 的 HTML
       --json              输出完整 JSON
   educoder-auto chaoxing-works                 列出待做作业
+  educoder-auto chaoxing-exam <须知页url> [选项]   做一场考试（浏览器 + 自动过滑块 + AI 作答）
+      --submit            真的交卷（默认只临时保存）
+      --no-verify         不做事后回读校验
+      --extra <text>      额外作答要求，例如「正文不少于 1500 字」
+      --gap <ms>          每题之间的间隔毫秒
+      --captcha-tries <n> 滑块最多尝试轮数（默认 12）
+      --headless          无头跑（默认有头）
+      --json              输出完整 JSON
 
 环境变量：
   EDUC_AI_BASEURL    OpenAI 兼容接口地址（没有宿主 llm 时的兜底通道）
@@ -115,6 +125,8 @@ async function main() {
       gap: { type: 'string' },
       image: { type: 'string', multiple: true },
       'no-verify': { type: 'boolean', default: false },
+      headless: { type: 'boolean', default: false },
+      'captcha-tries': { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -433,6 +445,47 @@ async function main() {
           const total = (v.matched ?? 0) + (v.mismatch?.length ?? 0);
           console.log(`回读：${v.ok ? '✅ 一致' : '⚠️ 有对不上的'}（核对 ${v.matched ?? 0}/${total} 题）`);
           for (const m of v.mismatch || []) console.log(`  ⚠️ ${m.questionId}：${m.reason}`);
+        }
+        console.log('');
+        if (result.ok && result.submitted) console.log('✅ 已交卷');
+        else if (result.ok) console.log('✅ 已暂存（未交卷）');
+        else console.log(`⚠️ 未完成：${result.reason ?? ''}`);
+      }
+      return result.ok ? 0 : 1;
+    }
+
+    case 'chaoxing-exam': {
+      const target = positionals[1];
+      if (!target) {
+        console.error('用法：educoder-auto chaoxing-exam <考试须知页 url> [选项]');
+        return 2;
+      }
+      const trace = chaoxingSolver.createTrace();
+      const result = await chaoxingExam.solveExam({
+        examUrl: target,
+        llm: undefined,
+        aiConfig,
+        submit: values.submit === true,
+        verify: values['no-verify'] !== true,
+        extra: values.extra,
+        gapMs: values.gap !== undefined ? Number(values.gap) : 0,
+        headless: values.headless === true,
+        captchaRounds: values['captcha-tries'] !== undefined ? Number(values['captcha-tries']) : 12,
+        outDir: join(chaoxingSession.dataDir(), 'exam'),
+        trace,
+      });
+      if (values.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(trace.text());
+        console.log('');
+        const paper = result.paper || {};
+        if (paper.title) console.log(`试卷：${paper.title}`);
+        if (paper.questions?.length) console.log(`题目：${paper.questions.length} 道`);
+        console.log(`滑块：${result.captchaRounds ?? 0} 轮${result.manual ? '（人工介入）' : ''}`);
+        if (result.problems?.length) {
+          console.log('没答上的：');
+          for (const p of result.problems) console.log(`  - ${p}`);
         }
         console.log('');
         if (result.ok && result.submitted) console.log('✅ 已交卷');

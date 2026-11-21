@@ -67,6 +67,7 @@ export default async function run() {
   assert.deepEqual(
     names,
     [
+      'chaoxing_exam',
       'chaoxing_login',
       'chaoxing_solve',
       'chaoxing_status',
@@ -77,7 +78,7 @@ export default async function run() {
       'iwrite_solve',
       'iwrite_status',
     ],
-    '应注册 9 个工具（头歌 3 + iWrite 3 + 学习通 3）',
+    '应注册 10 个工具（头歌 3 + iWrite 3 + 学习通 4）',
   );
 
   // 每个工具的形状都要能过宿主校验

@@ -26,6 +26,7 @@ import * as iwriteApi from './lib/iwrite-api.mjs';
 import * as chaoxingSolver from './lib/chaoxing-solver.mjs';
 import * as chaoxingSession from './lib/chaoxing-session.mjs';
 import * as chaoxingApi from './lib/chaoxing-api.mjs';
+import * as chaoxingExam from './lib/chaoxing-exam.mjs';
 import { pickRoute, routeSupportsImages } from './lib/ai.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -1097,7 +1098,156 @@ export function apply(ctx, rawConfig) {
     },
   };
 
-  // ── 工具 8：学习通登录 ────────────────────────────────────────────────
+  // ── 工具 8：学习通考试 ────────────────────────────────────────────────
+  const chaoxingExamTool = {
+    name: 'chaoxing_exam',
+    description: [
+      '自动完成学习通（超星）的一场在线考试。',
+      '流程：注入登录态 → 打开考试须知页 → 勾同意 + enterExam() → 过滑块验证码（缺口形状 IoU 匹配 + 合成鼠标事件拖动，失败自动刷新重试）→ 读试卷 → AI 逐题作答 → 写进 UEditor → 临时保存 → 回读校验 → 交卷。',
+      '注意：会真实进场、真实交卷且考试有倒计时，submit=false 只暂存不交卷。',
+    ].join(' '),
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: '考试须知页（examnotes）链接，例如 https://mooc1.chaoxing.com/exam-ans/exam/test/examcode/examnotes?courseId=..&classId=..&examId=..' },
+        submit: { type: 'boolean', description: '是否真的交卷。false = 只临时保存，默认跟随配置' },
+        verify: { type: 'boolean', description: '保存后回读页面对答案，默认 true' },
+        extra: { type: 'string', description: '额外作答要求，会拼进 prompt，例如「正文不少于 1500 字」' },
+        headless: { type: 'boolean', description: '是否无头跑。默认有头（进场/滑块更容易被平台接受）' },
+        captchaTries: { type: 'number', description: '滑块最多尝试次数，默认 12' },
+        gapMs: { type: 'number', description: '每题之间的间隔毫秒，默认 0' },
+        signal: { type: 'object', description: '（内部）取消信号', additionalProperties: true },
+      },
+      additionalProperties: false,
+    },
+    timeoutMs: chaoxingConfig.examTimeoutMs ?? 3_600_000,
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          ok: { type: 'boolean' },
+          submitted: { type: 'boolean' },
+          reason: { type: 'string' },
+          paperUrl: { type: 'string' },
+          title: { type: 'string' },
+          count: { type: 'number' },
+          captcha: { type: 'object', additionalProperties: true },
+          questions: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          answers: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          problems: { type: 'array', items: { type: 'string' } },
+          verified: { type: 'object', additionalProperties: true },
+          trace: { type: 'string' },
+          raw: { type: 'string' },
+        },
+        required: ['ok'],
+        additionalProperties: true,
+      },
+      render: (args, value) => {
+        const head = value.ok
+          ? `✅ ${value.submitted ? '考试已交卷' : '答案已暂存（未交卷）'}：共 ${value.count ?? 0} 道题`
+          : `⚠️ 没完成：${value.reason || '未知原因'}`;
+        const blocks = [{ type: 'text', text: head }];
+        if (value.title) blocks.push({ type: 'text', text: `试卷：${value.title}` });
+        if (value.captcha) {
+          const c = value.captcha;
+          blocks.push({
+            type: 'text',
+            text: c.tries > 0
+              ? `滑块：${c.passed ? `✅ 通过（第 ${c.tries} 次）` : `❌ 没过（试了 ${c.tries} 次）`}`
+              : '滑块：没遇到（页面没弹验证码，或根本没到验证码那一步）',
+          });
+        }
+        if (value.trace) blocks.push({ type: 'text', text: value.trace });
+        if (value.verified) {
+          const v = value.verified;
+          blocks.push({
+            type: 'text',
+            text: `回读校验：${v.ok ? '✅ 一致' : `⚠️ ${v.mismatch?.length ?? 0} 道对不上`}（核对 ${v.matched ?? v.count ?? 0} 道）`,
+          });
+        }
+        if (value.problems?.length) {
+          blocks.push({ type: 'text', text: '待注意：\n' + value.problems.map((p) => '- ' + p).join('\n') });
+        }
+        if (value.answers?.length) {
+          const lines = value.answers.map((a) => `${a.no}. [${a.kind}] ${a.answer}${a.truncated ? '…' : ''}`);
+          blocks.push({ type: 'text', text: '答案：\n' + lines.join('\n') });
+        }
+        if (value.raw) blocks.push({ type: 'text', text: '模型原始输出（解析失败）：\n' + value.raw });
+        return blocks;
+      },
+    },
+    async execute(args, exec) {
+      const outDir = join(chaoxingSession.dataDir(), 'exam');
+      const trace = chaoxingSolver.createTrace();
+      try {
+        const result = await chaoxingExam.solveExam({
+          examUrl: args.url,
+          submit: args.submit ?? chaoxingConfig.autoSubmit !== false,
+          verify: args.verify ?? chaoxingConfig.verify !== false,
+          extra: args.extra ?? chaoxingConfig.extra ?? undefined,
+          gapMs: args.gapMs ?? chaoxingConfig.gapMs ?? 0,
+          headless: args.headless ?? chaoxingConfig.examHeadless === true,
+          captchaRounds: args.captchaTries ?? chaoxingConfig.captchaTries ?? 12,
+          outDir,
+          trace,
+          llm: ctx.get('llm'),
+          aiConfig,
+          signal: exec?.signal ?? args.signal ?? undefined,
+        });
+
+        const paper = result.paper || {};
+        const questions = paper.questions || [];
+        const answersMap = result.answers || {};
+        const answers = questions.map((q) => {
+          const value = answersMap[q.questionId];
+          const text = q.kind === 'text' ? String(value == null ? '' : value).replace(/<[^>]+>/g, ' ') : String(value == null ? '' : value);
+          return {
+            no: q.index,
+            qid: q.questionId,
+            kind: q.kind,
+            answer: text.length > 120 ? text.slice(0, 120) : text,
+            truncated: text.length > 120,
+          };
+        });
+
+        const captchaInfo = {
+          passed: result.entered === true,
+          tries: result.captchaRounds ?? 0,
+          manual: !!result.manual,
+          rounds: result.captchaRounds ?? 0,
+        };
+
+        const traceText = [
+          result.stage ? `阶段：${result.stage}` : '',
+          `进场：${result.entered ? '✅ 已进入试卷页' : result.reason === 'ALREADY_SUBMITTED' ? '⏭ 这场已交过卷（跳到查看结果页）' : result.reason === 'NEED_LOGIN' ? '❌ 登录态失效' : '❌ 未进入'}`,
+          `滑块：${captchaInfo.tries} 轮${result.manual ? '（人工介入）' : ''}`,
+          paper.title ? `试卷：${paper.title}` : '',
+          questions.length ? `题目：${questions.length} 道` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
+
+        return pruneUndefined({
+          ok: result.ok === true,
+          submitted: result.submitted === true,
+          reason: result.reason ?? '',
+          paperUrl: result.enteredUrl ?? '',
+          title: paper.title || '',
+          count: questions.length,
+          captcha: captchaInfo,
+          questions: questions.map((q) => ({ index: q.index, qid: q.questionId, kind: q.kind, typeName: q.typeName, score: q.score })),
+          answers,
+          problems: result.problems ?? [],
+          verified: result.verify ? { ok: (result.problems || []).length === 0, count: questions.length, raw: result.verify } : undefined,
+          trace: traceText,
+        });
+      } catch (error) {
+        return pruneUndefined({ ok: false, reason: `考试流程失败：${error?.message ?? error}` });
+      }
+    },
+  };
+
+  // ── 工具 9：学习通登录 ────────────────────────────────────────────────
   const chaoxingLoginTool = {
     name: 'chaoxing_login',
     description:
@@ -1256,6 +1406,7 @@ export function apply(ctx, rawConfig) {
     iwriteLoginTool,
     iwriteStatusTool,
     chaoxingSolveTool,
+    chaoxingExamTool,
     chaoxingLoginTool,
     chaoxingStatusTool,
   ]) {
@@ -1296,7 +1447,7 @@ export function apply(ctx, rawConfig) {
   }, 'educoder-auto: teardown');
 
   logger?.info?.(
-    'educoder-auto: 已注册 educoder_solve / educoder_login / educoder_status / iwrite_solve / iwrite_login / iwrite_status / chaoxing_solve / chaoxing_login / chaoxing_status',
+    'educoder-auto: 已注册 educoder_solve / educoder_login / educoder_status / iwrite_solve / iwrite_login / iwrite_status / chaoxing_solve / chaoxing_exam / chaoxing_login / chaoxing_status',
   );
 }
 

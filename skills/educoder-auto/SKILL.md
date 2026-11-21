@@ -51,7 +51,25 @@
    - 有额外作答要求：`extra: "全用中文作答，简答题不少于 80 字"`
    - 不想回读校验（更快）：`verify: false`
 
-## 学习通是怎么做出来的（不用 DOM，走移动端 API）
+## 学习通考试：`chaoxing_exam`
+
+作业走移动端 API，考试走不了——考试须知页点「进入考试」要过一次滑块验证码，服务端强校验 `captchavalidate`（HTTP 直连返回 `{"msg":"安全验证不通过，请重新验证","type":"captchaVerify"}`）。所以考试走浏览器：
+
+1. 打开须知页 → 勾「我已阅读并同意」→ 触发 `enterExam()` → 弹滑块。
+2. 过滑块：页面内取 `big.jpg`（带缺口阴影的背景）+ `small.jpg`（拼图块），用**形状 IoU**（不是 NCC——缺口被灰色覆盖层遮住，NCC 峰值不可靠）定位缺口，再合成 `MouseEvent` 驱动 `.cx_rightBtn`（PointerEvent 和真实 `page.mouse` 都不行），`left ≈ sent - 7`。
+3. 进卷后 `readPaper` 解析题面（超星把题面放左栏 `.mark_name`、编辑器放右栏 `.splitS-right`，只沿着作答控件往上爬会停到右栏，读到的是工具栏）。
+4. AI 逐题作答 → 写进 UEditor（`UE.getEditor('answer'+qid)`，实例属性是 `ed.key`，不是 `containerId`）→ `tempSave=true` 暂存 → 回读比对 → `tempSave=false` 交卷。
+
+```js
+chaoxing_exam({ url: "…/examnotes?courseId=…&classId=…&examId=…", submit: true })
+```
+
+- 只练手不交卷：`submit: false`（逐题暂存就停）。
+- 滑块老是判错：`captchaTries: 24`（会刷新图片再来一轮）；实在过不去就传 `headless: false`，自己在那个人工窗口里拖一下，拖完程序接着读卷作答。
+- 已经交过卷的考试：直接返回「这场考试已经交过卷了」并跳到查看结果页，不会白跑滑块。
+- 登录态失效：返回 `NEED_LOGIN`，先跑 `chaoxing_login`。
+
+## 学习通是怎么做出来的（作业走移动端 API）
 
 PC 端作业页是 iframe + UEditor，几乎没法稳定自动化；所以走 `mooc1-api.chaoxing.com` 的移动端接口：
 
@@ -99,6 +117,13 @@ PC 端作业页是 iframe + UEditor，几乎没法稳定自动化；所以走 `m
 | `chaoxing_login` | `timeoutSec` | 等登录的秒数，默认 300 |
 | | `force` | 已有登录态也重登 |
 | `chaoxing_status` | 无 | 体检 + 待做作业列表 |
+| `chaoxing_exam` | `url` | 考试**须知页**地址（`examnotes` 链接） |
+| | `submit` | 是否真交卷，默认跟随配置（`chaoxing.autoSubmit`）；`false` = 逐题暂存就停 |
+| | `verify` | 交卷前回读比对，默认 `true` |
+| | `extra` | 额外作答要求，会拼进题干 |
+| | `headless` | 无头跑（默认 `true`）；滑块过不去时传 `false` 自己拖 |
+| | `captchaTries` | 滑块最多重试几次，默认 12 |
+| | `gapMs` | 每题之间的间隔毫秒 |
 
 ## 两条通道怎么选
 

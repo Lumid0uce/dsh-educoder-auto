@@ -16,7 +16,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ALL = process.argv.includes('--all');
 
 /** 会开浏览器的用例单独拎出来，默认不跑。 */
-const SLOW = new Set(['browser-e2e.test.mjs']);
+const SLOW = new Set(['browser-e2e.test.mjs', 'chaoxing-exam-dom.test.mjs']);
 
 const files = (await readdir(HERE))
   .filter((f) => f.endsWith('.test.mjs'))
